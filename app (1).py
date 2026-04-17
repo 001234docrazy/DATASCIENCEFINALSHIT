@@ -162,20 +162,29 @@ if page == "📊 Data Overview":
         missing_pct = (missing / len(df)) * 100
         unique = df[col].nunique()
         
+        # FIX: Check dtype BEFORE trying to access .min() and .max()
         if dtype == 'object':
             col_info.append({
                 'Column': col,
                 'Type': str(dtype),
                 'Missing': f"{missing} ({missing_pct:.2f}%)",
-                'Unique': unique
+                'Unique Values': unique
             })
         else:
+            # Only format numeric columns as float
+            try:
+                min_val = f"{df[col].min():.0f}"
+                max_val = f"{df[col].max():.0f}"
+            except:
+                min_val = "N/A"
+                max_val = "N/A"
+            
             col_info.append({
                 'Column': col,
                 'Type': str(dtype),
                 'Missing': f"{missing} ({missing_pct:.2f}%)",
-                'Min': f"{df[col].min():.0f}",
-                'Max': f"{df[col].max():.0f}"
+                'Min': min_val,
+                'Max': max_val
             })
     
     st.dataframe(pd.DataFrame(col_info), use_container_width=True)
@@ -230,10 +239,13 @@ elif page == "🔍 Exploratory Analysis":
     
     st.subheader("Correlation Matrix")
     numeric_df = df.select_dtypes(include=[np.number])
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sns.heatmap(numeric_df.corr().abs(), annot=True, cmap='YlGnBu', fmt=".2f", ax=ax, cbar_kws={'label': 'Correlation'})
-    st.pyplot(fig)
-    plt.close()
+    if len(numeric_df.columns) > 1:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sns.heatmap(numeric_df.corr().abs(), annot=True, cmap='YlGnBu', fmt=".2f", ax=ax, cbar_kws={'label': 'Correlation'})
+        st.pyplot(fig)
+        plt.close()
+    else:
+        st.warning("Not enough numeric columns for correlation matrix")
 
 # ============================================================================
 # PAGE 3: MODEL TRAINING
@@ -259,13 +271,13 @@ elif page == "⚙️ Model Training":
     X_train_scaled[numerical_features_all] = scaler.fit_transform(X_train[numerical_features_all])
     X_test_scaled[numerical_features_all] = scaler.transform(X_test[numerical_features_all])
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Training Samples", X_train.shape[0])
     with col2:
         st.metric("Test Samples", X_test.shape[0])
-    
-    st.metric("Total Features", X_train.shape[1])
+    with col3:
+        st.metric("Total Features", X_train.shape[1])
     
     # Train models
     results = {}
@@ -357,16 +369,22 @@ elif page == "⚙️ Model Training":
     results_df = pd.DataFrame({
         'Model': list(results.keys()),
         'R²': [v['R²'] for v in results.values()],
-        'RMSE': [v['RMSE'] for v in results.values()],
-        'MAE': [v['MAE'] for v in results.values()],
-        'MAPE (%)': [v['MAPE'] * 100 for v in results.values()]
+        'RMSE': [f"RM {v['RMSE']:,.0f}" for v in results.values()],
+        'MAE': [f"RM {v['MAE']:,.0f}" for v in results.values()],
+        'MAPE (%)': [f"{v['MAPE'] * 100:.2f}%" for v in results.values()]
     })
     
     st.dataframe(results_df, use_container_width=True)
     
-    best_model = results_df.loc[results_df['R²'].idxmax(), 'Model']
-    best_r2 = results_df['R²'].max()
+    best_idx = results_df['R²'].idxmax()
+    best_model = results_df.loc[best_idx, 'Model']
+    best_r2 = results_df.loc[best_idx, 'R²']
     st.success(f"🏆 Best Model: **{best_model}** (R² = {best_r2:.4f})")
+    
+    # Store results in session state for use in other pages
+    st.session_state.results = results
+    st.session_state.y_test = y_test
+    st.session_state.results_df = results_df
 
 # ============================================================================
 # PAGE 4: RESULTS & COMPARISON
@@ -374,9 +392,11 @@ elif page == "⚙️ Model Training":
 elif page == "📈 Results & Comparison":
     st.header("Model Comparison & Results")
     
-    st.info("Please train models first in the 'Model Training' section.")
-    
-    if 'results' in locals():
+    if 'results' in st.session_state:
+        results = st.session_state.results
+        y_test = st.session_state.y_test
+        results_df = st.session_state.results_df
+        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -387,8 +407,9 @@ elif page == "📈 Results & Comparison":
             ax.bar(models, r2_scores, color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A'], alpha=0.8, edgecolor='black')
             ax.set_ylabel('R² Score')
             ax.set_title('R² Comparison')
+            ax.set_ylim([0, 1.05])
             ax.grid(axis='y', alpha=0.3)
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=45, ha='right')
             st.pyplot(fig)
             plt.close()
         
@@ -400,7 +421,7 @@ elif page == "📈 Results & Comparison":
             ax.set_ylabel('RMSE (RM)')
             ax.set_title('RMSE Comparison')
             ax.grid(axis='y', alpha=0.3)
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=45, ha='right')
             st.pyplot(fig)
             plt.close()
         
@@ -414,7 +435,7 @@ elif page == "📈 Results & Comparison":
             ax.set_ylabel('MAE (RM)')
             ax.set_title('MAE Comparison')
             ax.grid(axis='y', alpha=0.3)
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=45, ha='right')
             st.pyplot(fig)
             plt.close()
         
@@ -426,9 +447,14 @@ elif page == "📈 Results & Comparison":
             ax.set_ylabel('MAPE (%)')
             ax.set_title('MAPE Comparison')
             ax.grid(axis='y', alpha=0.3)
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=45, ha='right')
             st.pyplot(fig)
             plt.close()
+        
+        st.subheader("Detailed Results Table")
+        st.dataframe(results_df, use_container_width=True)
+    else:
+        st.warning("⚠️ Please train models first in the 'Model Training' section.")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Built with Streamlit** 🎈")
